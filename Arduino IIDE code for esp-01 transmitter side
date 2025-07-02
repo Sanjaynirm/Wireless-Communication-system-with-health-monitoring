@@ -1,0 +1,82 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+
+const char* ssid = "Galaxy S23 E764";
+const char* password = "12345678";
+const char* serverIP1 = "192.168.255.70";  // IP address of the first receiving ESP
+const char* serverIP2 = "192.168.255.71";  // IP address of the second receiving ESP
+
+WiFiClient client;
+
+String inputBuffer = "";
+
+void setup() {
+  Serial.begin(9600);  // Initialize Serial Monitor
+
+  WiFi.begin(ssid, password);  // Connect to WiFi
+
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("\nWiFi connected!");
+  Serial.print("ESP IP: ");
+  Serial.println(WiFi.localIP());
+  Serial.println("Ready to send input...");
+}
+
+void loop() {
+  // Read from serial monitor or PIC
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\r' || c == '\n') {  // End of message
+      if (inputBuffer.length() > 0) {
+        sendToESP(inputBuffer);  // Send when full message received
+        inputBuffer = "";        // Reset buffer
+      }
+    } else {
+      inputBuffer += c;
+    }
+  }
+}
+
+// Function to send value via HTTP GET
+void sendToESP(String value) {
+  // Get the first character (digit) of the value
+  char target = value.charAt(0);  // First digit
+
+  // Check if the first digit is less than 3
+  if (target >= '0' && target <= '2') {  // 0, 1, 2 goes to ESP1
+    sendToServer(serverIP1, value);  // Send to ESP1
+  } else {  // Any other number >= 3 goes to ESP2
+    sendToServer(serverIP2, value);  // Send to ESP2
+  }
+}
+
+void sendToServer(const char* serverIP, String value) {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    String url = "http://" + String(serverIP) + "/send?value=" + value;
+
+    Serial.print("Sending: ");
+    Serial.println(value);
+
+    http.begin(client, url);  // Specify the server and URL
+    int httpCode = http.GET();  // Send GET request
+
+    if (httpCode > 0) {
+      String response = http.getString();
+      Serial.print("ESP replied: ");
+      Serial.println(response);
+    } else {
+      Serial.print("HTTP GET failed: ");
+      Serial.println(httpCode);
+    }
+
+    http.end();  // End the HTTP connection
+  } else {
+    Serial.println("Wi-Fi not connected!");
+  }
+}
