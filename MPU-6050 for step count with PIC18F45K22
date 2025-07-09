@@ -1,0 +1,362 @@
+*/*Use of AI / Cognitive Assistance Software is not allowed in any evaluation, assessment or exercise.*/
+/*=============================================================================
+	File Name:	BPagerDevice2.c  
+	Author:		BITO BABU
+	Date:		04/02/2025
+	Modified:	None
+	? Fanshawe College, 2025
+
+	Description: A device which can send and recieve messages for communication using RF transmission. 
+=============================================================================*/
+
+/* Preprocessor ===============================================================
+   Hardware Configuration Bits ==============================================*/
+
+#pragma config FOSC		= INTIO67
+#pragma config PLLCFG	= OFF
+#pragma config PRICLKEN = ON
+#pragma config FCMEN	= OFF
+#pragma config IESO		= OFF
+#pragma config PWRTEN	= OFF 
+#pragma config BOREN	= ON
+#pragma config BORV		= 285 
+#pragma config WDTEN	= OFF
+#pragma config PBADEN	= OFF
+#pragma config LVP		= OFF
+#pragma config MCLRE	= EXTMCLR
+
+// Libraries ==================================================================
+#include <p18f45k22.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <delays.h>
+#include <i2c.h>
+
+
+
+
+
+
+
+
+// Constants  =================================================================
+#define TRUE	1	
+#define FALSE	0
+#define OSCMASK 0x62
+#define T0FLAG	INTCONbits.TMR0IF
+
+#define RCFLAG	PIR1bits.RC1IF
+#define RC1READ RCREG1
+
+#define BUFSIZE 20
+
+/*#define RS LATAbits.LATA5  // Register Select
+#define EN LATAbits.LATA4  // Enable
+#define D4 LATAbits.LATA0 // Data bit 4
+#define D5 LATAbits.LATA1  // Data bit 5
+#define D6 LATAbits.LATA2  // Data bit 6
+#define D7 LATAbits.LATA3  // Data bit 7
+
+#define ROW1 LATBbits.LATB0 // Row1 pin
+#define ROW2 LATBbits.LATB1 // Row 2
+#define ROW3 LATBbits.LATB2 // Row 3
+#define ROW4 LATBbits.LATB3 // Row 4
+
+#define COL1 PORTBbits.RB4 // Col 1
+#define COL2 PORTBbits.RB5 // Col 2
+#define COL3 PORTDbits.RD6 // Col 3
+#define COL4 PORTDbits.RD7 // Col 4
+*/
+
+#define PWRLCD  LATEbits.LATE2// backlight control pin
+#define FOSCC	8000000
+#define I2CCLOCK 100000
+#define BITRATE  ((FOSCC/(4*I2CCLOCK))-1)
+
+#define MPU6050_ADDR 0x68
+
+#define RCFLAG	PIR1bits.RC1IF
+#define RC1READ RCREG1
+#define ZTHRESHOLD 800   // change as needed after testing
+#define BASE_MAGNITUDE 17148  // your average stationary magnitude
+#define COOLDOWN_MS 250       // wait time between step
+#define YTHRESHOLD 6000
+#define XTHRESHOLD 200
+
+// LCD pin macros for PORTB (4-bit, lower nibble)
+
+
+
+
+
+
+// Global Variables ==========================================================
+char buf[BUFSIZE];
+char *ptr=buf;
+char dataa=0;
+
+
+// Functions  =================================================================
+
+/* void isr();
+#pragma code interrupt_vector=0x08//interrupt vector at 0x0008
+void interrupt_vector(void)
+{             
+	_asm
+		GOTO isr // this function is programmed at 0x0008
+	_endasm
+
+}
+#pragma code
+*/
+/*>>> setOsc8Mhz: ===========================================================
+Author:      BITO BABU
+Date:        17/05/2024
+Modified:    None
+Desc:        The function sets the oscillator frequency to 4MHZ.
+Input:       None 
+Returns:     None 
+ ============================================================================*/
+void setOsc8Mhz()
+{
+    OSCCON=OSCMASK;
+    while(!OSCCONbits.HFIOFS); 
+} // eo setosc4MHZ()::
+
+/*>>> configPorts: ===========================================================
+Author:      BITO BABU
+Date:        17/05/2024
+Modified:    None
+Desc:        The function configure all the ports.
+Input:       None 
+Returns:     None 
+ ============================================================================*/
+void configPorts()
+{
+    ANSELA =0x00;
+	LATA   =0x00;
+	TRISA  =0xC0;
+	
+	ANSELC =0x00;
+	LATC   =0xFF;
+	TRISC  =0xFF;
+
+	ANSELD =0x00;
+	LATD   =0x00;
+	TRISD  =0xFF;
+
+	ANSELB =0x00;
+	LATB   =0xFF;
+	TRISB  =0xF0;
+
+	ANSELE =0x00;
+	LATE   =0x00;
+	TRISE  =0xFB;
+
+} //eo configPorts()::
+
+/*>>> configTMR0: ===========================================================
+Author:      BITO BABU
+Date:        17/05/2024
+Modified:    None
+Desc:        The function configure the Timer0 module.
+Input:       None 
+Returns:     None 
+ ============================================================================*/
+void configTMR0()
+{
+	T0CON=0x93;
+}
+
+/*>>> resetTMR0: ===========================================================
+Author:      BITO BABU
+Date:        17/05/2024
+Modified:    None
+Desc:        The function set the prescalevalue and resets the Timer0.
+Input:       None 
+Returns:     None 
+ ============================================================================*/
+void resetTMR0()
+{
+	T0FLAG=FALSE;
+	TMR0H=0x0B;
+	TMR0L=0xDC;
+}//eo resetTMR0()::
+
+
+/*>>> splConfig: ===========================================================
+Author:      BITO BABU
+Date:        17/05/2024
+Modified:    None
+Desc:        The function configure the USART1 module.
+Input:       None 
+Returns:     None 
+ ============================================================================*/
+void sp1Config()
+{
+	SPBRG1=51;
+	BAUDCON1=0x40;
+	RCSTA1=0x90;
+	TXSTA1=0x26;
+}//eo sp1Config()::
+
+
+
+/*>>> configInterrupts(): ===========================================================
+Author:      BITO BABU
+Date:        17/05/2024
+Modified:    None
+Desc:        This function enables the interrupts.
+Input:       None 
+Returns:     None 
+ ============================================================================*/
+void configInterrupts()
+{
+	INTCON=0xE0;
+	RCONbits.IPEN=FALSE;
+}//eo configInterrupts()::
+
+
+
+
+/*>>> systemInitialization: ===========================================================
+Author:      BITO BABU
+Date:        14/06/2024
+Modified:    None
+Desc:        This fucntion initialzes all other functions.
+Input:       None 
+Returns:     None 
+ ============================================================================*/
+void systemInitialization()
+{
+	setOsc8Mhz();
+	configPorts();
+	configTMR0();
+	resetTMR0();
+	sp1Config();
+	configInterrupts();
+		
+}//eo  systemInitialization()::
+
+
+
+
+
+/*>>>initMPU6050(): ===========================================================
+Author:      BITO BABU
+Date:        25/03/2025
+Modified:    None
+Desc:        This function initializes the MPU6050 sensor
+Input:       None 
+Returns:     None 
+ ============================================================================*/
+
+void initMPU6050(void)
+{
+    OpenI2C1(MASTER, SLEW_OFF);  // Initialize I2C
+	SSP1ADD = BITRATE;
+
+	StartI2C1();
+    WriteI2C1((MPU6050_ADDR << 1) | 0);  // Write mode
+    WriteI2C1(0x6B);  // Power Management Register
+    WriteI2C1(0x01);  // Wake up MPU6050
+    StopI2C1();
+
+	StartI2C1();
+    WriteI2C(0xD0); // MPU6050 Address + Write (0x68 << 1)
+ 	WriteI2C(0x19);	// Write to sample rate register
+	WriteI2C(0x07);	// 1KHz sample rate 
+	StopI2C();
+	
+	// Configure the Digital Low Pass Filter (DLPF)
+	StartI2C1();
+	WriteI2C(0xD0);
+    WriteI2C(0x1A); // Configuration Register
+    WriteI2C(0x00); 
+    StopI2C();
+
+	//Accelorometer config
+	StartI2C1();
+	WriteI2C(0xD0);
+	WriteI2C(0x1C);
+	WriteI2C(0x00);
+	StopI2C();
+
+	// Set the gyroscope range to ?250?/s (default)
+	StartI2C1();
+	WriteI2C(0xD0);
+    WriteI2C(0x1B); // Gyroscope Configuration Register
+    WriteI2C(0x18); // ?250?/s
+	StopI2C();
+	
+}
+
+/*>>> readMPU(): ===========================================================
+Author:      BITO BABU
+Date:        25/03/2025
+Modified:    None
+Desc:        This function reads accelorometer data from MPU6050
+Input:       Register address 
+Returns:     data from register address 
+ ============================================================================*/
+
+unsigned char readMPU(unsigned char reg) {
+    unsigned char data;
+
+    StartI2C1();                          // Start I2C
+    WriteI2C1((MPU6050_ADDR << 1) | 0);   // Write address (Write mode)
+    WriteI2C1(reg);                       // Send register address
+    RestartI2C1();                        // Restart for read operation
+    WriteI2C1((MPU6050_ADDR << 1) | 1);   // Write address (Read mode)
+    data = ReadI2C1();                    // Read data
+    NotAckI2C1();                         // Send NACK (no more data to read)
+    StopI2C1();                           // Stop I2C
+    return data;
+}
+/*
+void isr()
+{
+	
+		if(RCFLAG)
+		{
+			*ptr=RC1READ;
+			ptr++;
+			printf("buf");
+		}
+		INTCON|=0xC0;
+	 
+}
+
+
+*/
+
+
+/*=== MAIN: FUNCTION ==========================================================
+ ============================================================================*/
+void main( void )
+{
+	int stepCount=0;
+	int Ax,Ay,Az,Gx,Gy,Gz,lastAz,lastAy,lastAx;
+	float Xa,Ya,Za,t,Xg,Yg,Zg;
+	systemInitialization();
+	initMPU6050(); 
+		while(1)
+		{
+		    Ax= (((int)readMPU(0x3B))<<8|readMPU(0x3C));  
+			Ay=	(((int)readMPU(0x3D))<<8|readMPU(0x3E));
+			Az=	(((int)readMPU(0x3F))<<8|readMPU(0x40));
+			Gx=	(((int)readMPU(0x43))<<8|readMPU(0x44));
+			Gy=	(((int)readMPU(0x45))<<8|readMPU(0x46));
+			Gz=	(((int)readMPU(0x47))<<8|readMPU(0x48));
+	
+          if ((Az - lastAz) > ZTHRESHOLD && (Ax - lastAx) > XTHRESHOLD && (Ay - lastAy) > YTHRESHOLD )
+	{
+            stepCount++;
+			printf("Steps %d\n\r",stepCount);
+            lastAz = Az;
+			lastAx = Ax;
+			lastAy = Ay;
+        }
+	}
+
+}*
